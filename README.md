@@ -15,19 +15,18 @@ BotKubeやRobustaなどの既存ツールは**ClusterRole**（クラスタ全体
 ## 主な特徴
 
 - **🔒 セキュア**: ClusterRole不要、Namespace限定のRole権限のみで動作
-- **🔍 柔軟な監視**: Pod、Deployment、Serviceなど複数のリソースタイプに対応
-- **⚙️ 設定可能なフィルター**: イベントタイプ（作成/更新/削除）やラベルによるフィルタリング
+- **🐳 image変更検知** (v0.6.0): 指定したワークロードのコンテナイメージが変更されたら通知
+  - Deployment/StatefulSet/DaemonSet: 新imageのPodが起動した時に通知
+  - CronJob: image定義が変わった時に通知（通常のJob実行では通知しない）
+- **🔍 柔軟な監視**: Pod、Deployment、CronJobなど複数のリソースタイプに対応
+- **⚙️ watches構文**: シンプルで直感的な監視設定
 - **🎯 スマートな通知**: 不要な通知を削減する高度なフィルタリング
-  - **変更差分フィルタリング** (v0.1.5): 意味のある変更のみを通知（レプリカ数、イメージ、ステータス変化など）
-  - **重複イベント抑止** (v0.2.0): LRUキャッシュによる同一イベントの重複通知防止
-- **🔄 ホットリロード** (v0.3.0): ConfigMapの変更を自動検知してPod再起動不要で設定反映
-- **📦 イベントバッチ処理** (v0.4.0): 複数のイベントをまとめて通知し、通知頻度を最適化
+  - **変更差分フィルタリング**: 意味のある変更のみを通知（レプリカ数、イメージ、ステータス変化など）
+  - **重複イベント抑止**: LRUキャッシュによる同一イベントの重複通知防止
+- **🔄 ホットリロード**: ConfigMapの変更を自動検知してPod再起動不要で設定反映
+- **📦 イベントバッチ処理**: 複数のイベントをまとめて通知し、通知頻度を最適化
   - 3つのモード（detailed/summary/smart）で柔軟な表示制御
   - スマートモードで重要イベント（削除など）は常に詳細表示
-- **🔍 CEL式フィルターDSL** (v0.5.0): 複雑なフィルタリング条件を柔軟に記述
-  - Google CEL（Common Expression Language）による高度なフィルタリング
-  - イベント理由、ラベル、レプリカ数など多様な条件に対応
-  - Deploymentの重複通知問題を解決
 - **🎨 リッチな通知**: Slack Attachmentsによる色分けと詳細情報の表示
   - イベントタイプに応じた色分け（追加=緑、更新=黄、削除=赤）
   - コンテナイメージとタグ情報
@@ -60,13 +59,13 @@ BotKubeやRobustaなどの既存ツールは**ClusterRole**（クラスタ全体
        │ (informer/watch)
        │
 ┌──────▼──────┐
-│   Watcher   │  リソース変更の検知 + 変更差分フィルタリング
+│   Watcher   │  リソース変更の検知 + image変更検知
 └──────┬──────┘
        │
        │ (events)
        │
 ┌──────▼──────┐
-│   Filter    │  設定に基づくフィルタリング
+│   Filter    │  watches設定に基づくフィルタリング
 └──────┬──────┘
        │
        │ (filtered events)
@@ -143,22 +142,24 @@ releases:
   - name: kube-watcher
     namespace: monitoring
     chart: kube-watcher/kube-watcher
-    version: ~0.5.0
+    version: ~0.6.0
     values:
       - namespace: monitoring
         slack:
           webhookUrl: "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
         config:
-          resources:
-            - kind: Pod
-            - kind: Deployment
-          filters:
-            - resource: Pod
-              eventTypes: [DELETED]
-            - resource: Deployment
-              # CEL式によるフィルタリング（v0.5.0以降）
-              # ReplicaSetUpdatedとNewReplicaSetAvailableを除外
-              expression: 'event.eventType == "UPDATED" && event.reason != "ReplicaSetUpdated" && event.reason != "NewReplicaSetAvailable"'
+          # watches構文によるシンプルな監視設定
+          watches:
+            - selector:
+                kind: Deployment
+                labels:
+                  app: my-app
+              triggers:
+                - imageChange: true
+            - selector:
+                kind: CronJob
+              triggers:
+                - imageChange: true
           # 重複排除設定（オプション）
           deduplication:
             enabled: true
@@ -201,12 +202,7 @@ stringData:
 
 ### 3. 設定のカスタマイズ（任意）
 
-`deployments/configmap.yaml`を編集して、以下の項目を設定できます。
-
-- 監視対象のリソース
-- イベントタイプのフィルター
-- ラベルによるフィルター
-- メッセージテンプレート
+`deployments/configmap.yaml`を編集して、監視対象とトリガーを設定できます。
 
 ### 4. Kubernetesへのデプロイ
 
@@ -246,7 +242,7 @@ kubectl logs -l app=kube-watcher -f
 
 ## Slack通知の表示例
 
-v0.1.4 から、Slack Attachments API を使用したリッチな通知フォーマットに対応しています。
+Slack Attachments API を使用したリッチな通知フォーマットに対応しています。
 
 ### 通知の色分け
 
@@ -264,11 +260,16 @@ v0.1.4 から、Slack Attachments API を使用したリッチな通知フォー
 - コンテナ情報（名前とイメージタグ）
 - レプリカ情報（Desired / Ready / Current）
 - Deployment のステータスと理由
+- **image変更時**: 変更前後のイメージ情報
 
 #### Pod の場合
 - Podのステータス（Running、Pending、Failed など）
 - コンテナイメージ情報
 - 理由とメッセージ（エラー時など）
+
+#### CronJob の場合
+- コンテナイメージ情報
+- **image変更時**: 変更前後のイメージ情報（通常のJob実行では通知しない）
 
 #### Service の場合
 - サービスタイプ（ClusterIP、LoadBalancer など）
@@ -287,6 +288,7 @@ v0.1.4 から、Slack Attachments API を使用したリッチな通知フォー
 - `ReplicaSet`
 - `StatefulSet`
 - `DaemonSet`
+- `CronJob` (v0.6.0で追加)
 
 ### イベントタイプ
 
@@ -294,39 +296,47 @@ v0.1.4 から、Slack Attachments API を使用したリッチな通知フォー
 - `UPDATED`: リソースが更新された
 - `DELETED`: リソースが削除された
 
-### 設定例
+### 設定例（watches構文）
+
+v0.6.0 から、シンプルで直感的な `watches` 構文で監視設定を記述します。
 
 ```yaml
 namespace: "production"
 
-resources:
-  - kind: Pod
-  - kind: Deployment
+# watches構文による監視設定
+watches:
+  # Deploymentのimage変更を監視
+  - selector:
+      kind: Deployment
+      labels:
+        app: my-app
+    triggers:
+      - imageChange: true
 
-filters:
-  # 特定のラベルを持つPodの削除のみ通知
-  - resource: Pod
-    eventTypes: ["DELETED"]
-    labels:
-      environment: "production"
+  # StatefulSetのimage変更を監視
+  - selector:
+      kind: StatefulSet
+    triggers:
+      - imageChange: true
 
-  # Deploymentのすべての変更を通知
-  - resource: Deployment
-    eventTypes: ["ADDED", "UPDATED", "DELETED"]
+  # DaemonSetのimage変更を監視
+  - selector:
+      kind: DaemonSet
+    triggers:
+      - imageChange: true
 
-  # CEL式による高度なフィルタリング（v0.5.0以降）
-  # expressionが設定されている場合、eventTypesとlabelsよりも優先されます
-  - resource: Deployment
-    # ReplicaSetUpdatedとNewReplicaSetAvailableを除外
-    expression: 'event.eventType == "UPDATED" && event.reason != "ReplicaSetUpdated" && event.reason != "NewReplicaSetAvailable"'
+  # CronJobのimage変更を監視（通常のJob実行では通知しない）
+  - selector:
+      kind: CronJob
+    triggers:
+      - imageChange: true
 
-  - resource: Pod
-    # 本番環境のPodで削除またはapp=webのラベルを持つもの
-    expression: 'event.eventType == "DELETED" || event.labels.app == "web"'
-
-  - resource: Deployment
-    # レプリカ数が3を超える場合のみ通知
-    expression: 'has(event.replicas) && event.replicas.desired > 3'
+  # 特定の名前のPodを監視
+  - selector:
+      kind: Pod
+      name: important-pod
+    triggers:
+      - imageChange: true
 
 notifier:
   slack:
@@ -339,13 +349,13 @@ notifier:
       ラベル: {{ range $k, $v := .Labels }}{{ $k }}={{ $v }} {{ end }}
       {{- end }}
 
-# イベント重複排除設定（オプション、v0.2.0以降）
+# イベント重複排除設定（オプション）
 deduplication:
   enabled: true        # 重複排除を有効化
   ttlSeconds: 300      # 5分間同じイベントは通知しない
   maxCacheSize: 1000   # 最大1000エントリをキャッシュ
 
-# イベントバッチ処理設定（オプション、v0.4.0以降）
+# イベントバッチ処理設定（オプション）
 batching:
   enabled: false       # バッチ処理を有効化
   windowSeconds: 300   # 5分間のイベントをまとめて通知
@@ -356,6 +366,31 @@ batching:
     alwaysShowDetails:      # 常に詳細表示するイベントタイプ
       - DELETED
 ```
+
+### watches構文の詳細
+
+#### selector（監視対象の指定）
+
+| フィールド | 説明 | 例 |
+|-----------|------|-----|
+| `kind` | リソース種類（必須） | `Deployment`, `Pod`, `CronJob` |
+| `name` | リソース名（オプション） | `my-app` |
+| `labels` | ラベルセレクター（オプション） | `app: web` |
+
+#### triggers（通知トリガー）
+
+| フィールド | 説明 | 対象リソース |
+|-----------|------|--------------|
+| `imageChange` | コンテナイメージの変更時に通知 | Pod, Deployment, StatefulSet, DaemonSet, CronJob |
+
+### image変更検知の動作
+
+| リソース | 検知方法 | 説明 |
+|---------|---------|------|
+| Deployment | 新imageのPodがADDED | ロールアウト時に新しいPodが起動したタイミングで通知 |
+| StatefulSet | 新imageのPodがADDED | 同上 |
+| DaemonSet | 新imageのPodがADDED | 同上 |
+| CronJob | image定義がUPDATED | JobTemplate内のimage定義が変わった時のみ通知（通常のJob実行では通知しない） |
 
 ### テンプレート変数
 
@@ -372,64 +407,21 @@ batching:
 | `.Timestamp` | イベント発生時刻 | `2025-10-28T12:34:56Z` |
 | `.Labels` | リソースのラベル | `map[app:web env:prod]` |
 
-#### 詳細情報（v0.1.4以降）
+#### 詳細情報
 
 | 変数 | 説明 | 対象リソース |
 |------|------|--------------|
 | `.Status` | リソースのステータス | Pod |
 | `.Reason` | イベントの理由 | Pod, Deployment |
 | `.Message` | イベントメッセージ | Pod, Deployment |
-| `.Containers` | コンテナ情報（名前、イメージ） | Pod, Deployment |
+| `.Containers` | コンテナ情報（名前、イメージ） | Pod, Deployment, CronJob |
 | `.Replicas` | レプリカ情報（Desired/Ready/Current） | Deployment, ReplicaSet, StatefulSet |
 | `.ServiceType` | サービスタイプ | Service |
+| `.ImageChanged` | image変更フラグ | Deployment, StatefulSet, DaemonSet, CronJob |
+| `.OldImages` | 変更前のイメージ情報 | 同上 |
+| `.NewImages` | 変更後のイメージ情報 | 同上 |
 
-**注意**: v0.1.4 以降、デフォルトでは Slack Attachments 形式で通知が送信されるため、これらの詳細情報は自動的に整形されて表示されます。カスタムテンプレートを使用する場合のみ、これらの変数を明示的に参照する必要があります。
-
-### CEL式フィルター（v0.5.0以降）
-
-フィルターに`expression`フィールドを指定することで、CEL（Common Expression Language）による高度なフィルタリングが可能です。
-
-#### 利用可能なCELフィールド
-
-| フィールド | 説明 | 例 |
-|-----------|------|-----|
-| `event.kind` | リソース種類 | `"Pod"`, `"Deployment"` |
-| `event.namespace` | Namespace名 | `"default"`, `"production"` |
-| `event.name` | リソース名 | `"my-app-123"` |
-| `event.eventType` | イベントタイプ | `"ADDED"`, `"UPDATED"`, `"DELETED"` |
-| `event.reason` | イベント理由 | `"ReplicaSetUpdated"`, `"ScalingReplicaSet"` |
-| `event.message` | イベントメッセージ | 文字列 |
-| `event.status` | リソースステータス | `"Running"`, `"Pending"` |
-| `event.labels` | ラベル（map） | `event.labels.app == "web"` |
-| `event.replicas` | レプリカ情報（構造体） | `event.replicas.desired > 3` |
-| `event.containers` | コンテナ情報（配列） | - |
-| `event.serviceType` | サービスタイプ | `"ClusterIP"`, `"LoadBalancer"` |
-
-#### CEL式の例
-
-```yaml
-# Deploymentの重複通知を除外（最も一般的な使い方）
-- resource: Deployment
-  expression: 'event.eventType == "UPDATED" && event.reason != "ReplicaSetUpdated" && event.reason != "NewReplicaSetAvailable"'
-
-# 複数のイベントタイプ（IN演算子）
-- resource: Pod
-  expression: 'event.eventType in ["ADDED", "DELETED"]'
-
-# ラベルと条件の組み合わせ
-- resource: Pod
-  expression: 'event.namespace == "prod" && event.labels.app == "web" && event.eventType == "DELETED"'
-
-# レプリカ数の条件
-- resource: Deployment
-  expression: 'has(event.replicas) && event.replicas.desired > 3'
-
-# 複雑なOR条件
-- resource: Pod
-  expression: 'event.eventType == "DELETED" || (event.eventType == "UPDATED" && event.status != "Running")'
-```
-
-**注意**: `expression` が設定されている場合、`eventTypes` と `labels` フィールドは無視され、CEL式の評価結果のみが使用されます。
+**注意**: デフォルトでは Slack Attachments 形式で通知が送信されるため、これらの詳細情報は自動的に整形されて表示されます。カスタムテンプレートを使用する場合のみ、これらの変数を明示的に参照する必要があります。
 
 ## 開発
 
@@ -494,12 +486,10 @@ make lint-fix
 ├── pkg/
 │   ├── config/                 # 設定管理
 │   │   └── config.go
-│   ├── watcher/                # Kubernetesリソース監視
+│   ├── watcher/                # Kubernetesリソース監視 + image変更検知
 │   │   └── watcher.go
-│   ├── filter/                 # イベントフィルタリング
-│   │   ├── filter.go
-│   │   ├── cel.go              # CEL式評価エンジン
-│   │   └── cel_test.go
+│   ├── filter/                 # イベントフィルタリング（watches構文）
+│   │   └── filter.go
 │   ├── dedup/                  # 重複イベント抑止
 │   │   ├── dedup.go
 │   │   └── dedup_test.go
@@ -539,30 +529,29 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
     verbs: ["list", "watch", "get"]
+
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["list", "watch", "get"]
 ```
 
 **ClusterRoleは不要です！** そのため、マルチテナント環境でも安全にご利用いただけます。
 
 ## ロードマップ
 
-### Step 1（完了）✅
+### 完了 ✅
 - [x] **基本機能の実装** - Kubernetesリソースの監視とSlack通知
 - [x] **Helmチャート対応** - Helmによる簡単なデプロイ
 - [x] **CI/CD構築** - GitHub Actionsによる自動ビルドとリリース
-
-### Step 2（完了）✅
 - [x] **リッチな通知フォーマット** - Slack Attachments APIによる色分け表示
 - [x] **詳細情報の表示** - コンテナイメージ、レプリカ数、ステータスなど
-- [x] **イベントタイプ別の色分け** - ADDED/UPDATED/DELETED の視覚的区別
-- [x] **変更差分フィルタリング** (v0.1.5) - 意味のある変更のみを通知
+- [x] **変更差分フィルタリング** - 意味のある変更のみを通知
+- [x] **重複イベント抑止（LRUキャッシュ）** - 同一イベントの重複通知を防止
+- [x] **ConfigMapのホットリロード** - Pod再起動なしで設定を自動反映
+- [x] **イベント集約とバッチ処理** - 複数イベントをまとめて通知、3つのモード対応
+- [x] **image変更検知 + watches構文** (v0.6.0) - 指定したワークロードのimage変更を検知
 
-### Step 3（完了）✅
-- [x] **重複イベント抑止（LRUキャッシュ）** (v0.2.0) - 同一イベントの重複通知を防止
-- [x] **ConfigMapのホットリロード** (v0.3.0) - Pod再起動なしで設定を自動反映
-- [x] **イベント集約とバッチ処理** (v0.4.0) - 複数イベントをまとめて通知、3つのモード対応
-- [x] **複雑なルール記述のためのフィルターDSL** (v0.5.0) - CEL式による高度なフィルタリング
-
-### Step 4（将来）
+### 将来
 - [ ] 追加の通知先対応（Teams、Discord、汎用Webhook）
 - [ ] リソースタイプごとのカスタムテンプレート
 - [ ] メトリクスエンドポイント（Prometheus対応）
@@ -595,24 +584,34 @@ kubectl logs -l app=kube-watcher -n your-namespace
 ### イベントが検知されない場合
 
 1. リソースが監視対象のNamespace内に存在することを確認してください
-2. フィルター設定を確認してください
+2. watches設定を確認してください
+   - `selector.kind` が正しいか
+   - `selector.labels` が対象リソースに一致しているか
+   - `triggers` が設定されているか
 3. RBACのリソース権限を確認してください
 
 ### 通知が頻繁すぎる場合
 
 kube-watcher には複数の通知削減機能があります：
 
-1. **変更差分フィルタリング** (v0.1.5以降、自動有効)
-   - 意味のある変更のみを通知します
-   - ResourceVersion が同じ場合は通知しません
-   - レプリカ数、イメージ、ステータスなどの重要な変更のみ検出
+1. **watches構文のlabelsセレクター**
+   - 監視対象を特定のラベルを持つリソースに限定
+   ```yaml
+   watches:
+     - selector:
+         kind: Deployment
+         labels:
+           environment: production  # productionラベルのみ監視
+       triggers:
+         - imageChange: true
+   ```
 
-2. **重複イベント抑止** (v0.2.0以降、要設定)
+2. **重複イベント抑止**
    - 同じイベントが短時間に複数回発生しても1回だけ通知
    - `deduplication.enabled: true` で有効化
    - `ttlSeconds` で重複判定期間を調整（デフォルト: 300秒）
 
-3. **イベントバッチ処理** (v0.4.0以降、要設定)
+3. **イベントバッチ処理**
    - 複数のイベントをまとめて通知し、通知回数を削減
    - `batching.enabled: true` で有効化
    - `windowSeconds` でバッチウィンドウを調整（デフォルト: 300秒 = 5分）
@@ -624,27 +623,9 @@ kube-watcher には複数の通知削減機能があります：
      mode: smart
    ```
 
-4. **CEL式フィルター** (v0.5.0以降、推奨)
-   - イベント理由やその他の条件で柔軟にフィルタリング
-   - Deploymentの重複通知問題を解決
-   ```yaml
-   filters:
-     - resource: Deployment
-       # ReplicaSetUpdatedとNewReplicaSetAvailableを除外
-       expression: 'event.eventType == "UPDATED" && event.reason != "ReplicaSetUpdated" && event.reason != "NewReplicaSetAvailable"'
-   ```
-
-5. **イベントタイプフィルター**
-   - UPDATED イベントを除外することで通知を大幅削減
-   ```yaml
-   filters:
-     - resource: Pod
-       eventTypes: ["ADDED", "DELETED"]  # UPDATEDを除外
-   ```
-
 ### 設定変更が反映されない場合
 
-v0.3.0 以降、ConfigMap の変更は自動的に検知され、Pod の再起動なしで反映されます。
+ConfigMap の変更は自動的に検知され、Pod の再起動なしで反映されます。
 
 1. **ホットリロードの動作確認**
    ```bash
