@@ -12,8 +12,10 @@ func TestNewSlackNotifier(t *testing.T) {
 	webhookURL := "https://hooks.slack.com/services/test"
 	notifier := NewSlackNotifier(webhookURL)
 
+	// NewSlackNotifier always returns non-nil
 	if notifier == nil {
 		t.Fatal("NewSlackNotifier() returned nil")
+		return // unreachable, but helps staticcheck
 	}
 
 	if notifier.webhookURL != webhookURL {

@@ -7,20 +7,23 @@ import (
 )
 
 func TestLoadConfig_ValidConfig(t *testing.T) {
-	// 有効な設定ファイルを作成
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
 	validConfig := `
 namespace: production
 
-resources:
-  - kind: Pod
-  - kind: Deployment
-
-filters:
-  - resource: Pod
-    eventTypes: [ADDED, DELETED]
+watches:
+  - selector:
+      kind: Pod
+    triggers:
+      - imageChange: true
+  - selector:
+      kind: Deployment
+      labels:
+        app: web
+    triggers:
+      - imageChange: true
 
 notifier:
   slack:
@@ -37,13 +40,12 @@ notifier:
 		t.Fatalf("LoadConfig() error = %v, want nil", err)
 	}
 
-	// 基本的な検証
 	if cfg.Namespace != "production" {
 		t.Errorf("Namespace = %v, want production", cfg.Namespace)
 	}
 
-	if len(cfg.Resources) != 2 {
-		t.Errorf("len(Resources) = %v, want 2", len(cfg.Resources))
+	if len(cfg.Watches) != 2 {
+		t.Errorf("len(Watches) = %v, want 2", len(cfg.Watches))
 	}
 
 	if cfg.Notifier.Slack.WebhookURL != "https://hooks.slack.com/services/TEST/WEBHOOK/URL" {
@@ -64,8 +66,9 @@ func TestLoadConfig_InvalidYAML(t *testing.T) {
 
 	invalidYAML := `
 namespace: test
-resources:
-  - kind: Pod
+watches:
+  - selector:
+      kind: Pod
   invalid yaml here!!!
 `
 
@@ -81,8 +84,11 @@ resources:
 
 func TestValidate_MissingNamespace(t *testing.T) {
 	cfg := &Config{
-		Resources: []ResourceConfig{
-			{Kind: "Pod"},
+		Watches: []WatchConfig{
+			{
+				Selector: WatchSelector{Kind: "Pod"},
+				Triggers: []Trigger{{ImageChange: true}},
+			},
 		},
 		Notifier: NotifierConfig{
 			Slack: SlackConfig{
@@ -97,10 +103,10 @@ func TestValidate_MissingNamespace(t *testing.T) {
 	}
 }
 
-func TestValidate_MissingResources(t *testing.T) {
+func TestValidate_MissingWatches(t *testing.T) {
 	cfg := &Config{
 		Namespace: "default",
-		Resources: []ResourceConfig{},
+		Watches:   []WatchConfig{},
 		Notifier: NotifierConfig{
 			Slack: SlackConfig{
 				WebhookURL: "https://example.com",
@@ -110,15 +116,18 @@ func TestValidate_MissingResources(t *testing.T) {
 
 	err := cfg.Validate()
 	if err == nil {
-		t.Error("Validate() error = nil, want error for missing resources")
+		t.Error("Validate() error = nil, want error for missing watches")
 	}
 }
 
 func TestValidate_MissingWebhookURL(t *testing.T) {
 	cfg := &Config{
 		Namespace: "default",
-		Resources: []ResourceConfig{
-			{Kind: "Pod"},
+		Watches: []WatchConfig{
+			{
+				Selector: WatchSelector{Kind: "Pod"},
+				Triggers: []Trigger{{ImageChange: true}},
+			},
 		},
 		Notifier: NotifierConfig{
 			Slack: SlackConfig{
@@ -133,11 +142,80 @@ func TestValidate_MissingWebhookURL(t *testing.T) {
 	}
 }
 
+func TestValidate_MissingSelectorKind(t *testing.T) {
+	cfg := &Config{
+		Namespace: "default",
+		Watches: []WatchConfig{
+			{
+				Selector: WatchSelector{Kind: ""},
+				Triggers: []Trigger{{ImageChange: true}},
+			},
+		},
+		Notifier: NotifierConfig{
+			Slack: SlackConfig{
+				WebhookURL: "https://example.com",
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("Validate() error = nil, want error for missing selector kind")
+	}
+}
+
+func TestValidate_MissingTriggers(t *testing.T) {
+	cfg := &Config{
+		Namespace: "default",
+		Watches: []WatchConfig{
+			{
+				Selector: WatchSelector{Kind: "Pod"},
+				Triggers: []Trigger{},
+			},
+		},
+		Notifier: NotifierConfig{
+			Slack: SlackConfig{
+				WebhookURL: "https://example.com",
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("Validate() error = nil, want error for missing triggers")
+	}
+}
+
+func TestValidate_NoEnabledTrigger(t *testing.T) {
+	cfg := &Config{
+		Namespace: "default",
+		Watches: []WatchConfig{
+			{
+				Selector: WatchSelector{Kind: "Pod"},
+				Triggers: []Trigger{{ImageChange: false}},
+			},
+		},
+		Notifier: NotifierConfig{
+			Slack: SlackConfig{
+				WebhookURL: "https://example.com",
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("Validate() error = nil, want error for no enabled trigger")
+	}
+}
+
 func TestValidate_DefaultTemplate(t *testing.T) {
 	cfg := &Config{
 		Namespace: "default",
-		Resources: []ResourceConfig{
-			{Kind: "Pod"},
+		Watches: []WatchConfig{
+			{
+				Selector: WatchSelector{Kind: "Pod"},
+				Triggers: []Trigger{{ImageChange: true}},
+			},
 		},
 		Notifier: NotifierConfig{
 			Slack: SlackConfig{
@@ -152,22 +230,21 @@ func TestValidate_DefaultTemplate(t *testing.T) {
 		t.Errorf("Validate() error = %v, want nil", err)
 	}
 
-	// デフォルトテンプレートが設定されているか確認
 	if cfg.Notifier.Slack.Template == "" {
 		t.Error("Template is empty, expected default template to be set")
 	}
 }
 
-func TestGetFilterForResource(t *testing.T) {
+func TestGetWatchForResource(t *testing.T) {
 	cfg := &Config{
-		Filters: []FilterConfig{
+		Watches: []WatchConfig{
 			{
-				Resource:   "Pod",
-				EventTypes: []string{"DELETED"},
+				Selector: WatchSelector{Kind: "Pod"},
+				Triggers: []Trigger{{ImageChange: true}},
 			},
 			{
-				Resource:   "Deployment",
-				EventTypes: []string{"ADDED", "UPDATED"},
+				Selector: WatchSelector{Kind: "Deployment"},
+				Triggers: []Trigger{{ImageChange: true}},
 			},
 		},
 	}
@@ -179,19 +256,19 @@ func TestGetFilterForResource(t *testing.T) {
 		wantKind string
 	}{
 		{
-			name:     "existing filter for Pod",
+			name:     "existing watch for Pod",
 			kind:     "Pod",
 			wantNil:  false,
 			wantKind: "Pod",
 		},
 		{
-			name:     "existing filter for Deployment",
+			name:     "existing watch for Deployment",
 			kind:     "Deployment",
 			wantNil:  false,
 			wantKind: "Deployment",
 		},
 		{
-			name:    "non-existing filter for Service",
+			name:    "non-existing watch for Service",
 			kind:    "Service",
 			wantNil: true,
 		},
@@ -199,47 +276,76 @@ func TestGetFilterForResource(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			filter := cfg.GetFilterForResource(tt.kind)
+			watch := cfg.GetWatchForResource(tt.kind)
 
 			if tt.wantNil {
-				if filter != nil {
-					t.Errorf("GetFilterForResource() = %v, want nil", filter)
+				if watch != nil {
+					t.Errorf("GetWatchForResource() = %v, want nil", watch)
 				}
 			} else {
-				if filter == nil {
-					t.Fatal("GetFilterForResource() = nil, want non-nil")
+				if watch == nil {
+					t.Fatal("GetWatchForResource() = nil, want non-nil")
 				}
-				if filter.Resource != tt.wantKind {
-					t.Errorf("filter.Resource = %v, want %v", filter.Resource, tt.wantKind)
+				if watch.Selector.Kind != tt.wantKind {
+					t.Errorf("watch.Selector.Kind = %v, want %v", watch.Selector.Kind, tt.wantKind)
 				}
 			}
 		})
 	}
 }
 
+func TestGetWatchedKinds(t *testing.T) {
+	cfg := &Config{
+		Watches: []WatchConfig{
+			{Selector: WatchSelector{Kind: "Pod"}},
+			{Selector: WatchSelector{Kind: "Deployment"}},
+			{Selector: WatchSelector{Kind: "Pod"}}, // duplicate
+		},
+	}
+
+	kinds := cfg.GetWatchedKinds()
+
+	if len(kinds) != 2 {
+		t.Errorf("len(GetWatchedKinds()) = %v, want 2", len(kinds))
+	}
+
+	kindSet := make(map[string]bool)
+	for _, k := range kinds {
+		kindSet[k] = true
+	}
+
+	if !kindSet["Pod"] {
+		t.Error("GetWatchedKinds() should contain Pod")
+	}
+	if !kindSet["Deployment"] {
+		t.Error("GetWatchedKinds() should contain Deployment")
+	}
+}
+
 func TestLoadConfig_ComplexConfiguration(t *testing.T) {
-	// 複雑な設定ファイルのテスト
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "complex.yaml")
 
 	complexConfig := `
 namespace: production
 
-resources:
-  - kind: Pod
-  - kind: Deployment
-  - kind: Service
-
-filters:
-  - resource: Pod
-    eventTypes: [DELETED]
-    labels:
-      environment: production
-      tier: frontend
-  - resource: Deployment
-    eventTypes: [ADDED, UPDATED, DELETED]
-  - resource: Service
-    eventTypes: [ADDED, DELETED]
+watches:
+  - selector:
+      kind: Pod
+      labels:
+        environment: production
+        tier: frontend
+    triggers:
+      - imageChange: true
+  - selector:
+      kind: Deployment
+      name: my-app
+    triggers:
+      - imageChange: true
+  - selector:
+      kind: CronJob
+    triggers:
+      - imageChange: true
 
 notifier:
   slack:
@@ -258,27 +364,29 @@ notifier:
 		t.Fatalf("LoadConfig() error = %v, want nil", err)
 	}
 
-	// リソース数の確認
-	if len(cfg.Resources) != 3 {
-		t.Errorf("len(Resources) = %v, want 3", len(cfg.Resources))
+	if len(cfg.Watches) != 3 {
+		t.Errorf("len(Watches) = %v, want 3", len(cfg.Watches))
 	}
 
-	// フィルター数の確認
-	if len(cfg.Filters) != 3 {
-		t.Errorf("len(Filters) = %v, want 3", len(cfg.Filters))
+	podWatch := cfg.GetWatchForResource("Pod")
+	if podWatch == nil {
+		t.Fatal("Pod watch is nil")
 	}
 
-	// Podフィルターのラベル確認
-	podFilter := cfg.GetFilterForResource("Pod")
-	if podFilter == nil {
-		t.Fatal("Pod filter is nil")
+	if len(podWatch.Selector.Labels) != 2 {
+		t.Errorf("len(PodWatch.Selector.Labels) = %v, want 2", len(podWatch.Selector.Labels))
 	}
 
-	if len(podFilter.Labels) != 2 {
-		t.Errorf("len(PodFilter.Labels) = %v, want 2", len(podFilter.Labels))
+	if podWatch.Selector.Labels["environment"] != "production" {
+		t.Errorf("PodWatch.Selector.Labels[environment] = %v, want production", podWatch.Selector.Labels["environment"])
 	}
 
-	if podFilter.Labels["environment"] != "production" {
-		t.Errorf("PodFilter.Labels[environment] = %v, want production", podFilter.Labels["environment"])
+	deployWatch := cfg.GetWatchForResource("Deployment")
+	if deployWatch == nil {
+		t.Fatal("Deployment watch is nil")
+	}
+
+	if deployWatch.Selector.Name != "my-app" {
+		t.Errorf("DeploymentWatch.Selector.Name = %v, want my-app", deployWatch.Selector.Name)
 	}
 }

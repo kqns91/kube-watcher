@@ -390,32 +390,26 @@ func TestFormatSlackMessage_WithContainers(t *testing.T) {
 	attachment := msg.Attachments[0]
 
 	// コンテナフィールドが存在するか確認
-	var containerField *struct {
-		Title string
-		Value string
-		Short bool
-	}
+	var containerValue string
+	containerFound := false
 	for _, field := range attachment.Fields {
 		if field.Title == "コンテナ" {
-			containerField = &struct {
-				Title string
-				Value string
-				Short bool
-			}{field.Title, field.Value, field.Short}
+			containerValue = field.Value
+			containerFound = true
 			break
 		}
 	}
 
-	if containerField == nil {
+	if !containerFound {
 		t.Fatal("Container field not found")
 	}
 
-	if !strings.Contains(containerField.Value, "nginx:1.21") {
-		t.Errorf("Container field should contain nginx:1.21, got %q", containerField.Value)
+	if !strings.Contains(containerValue, "nginx:1.21") {
+		t.Errorf("Container field should contain nginx:1.21, got %q", containerValue)
 	}
 
-	if !strings.Contains(containerField.Value, "envoy:v1.20.0") {
-		t.Errorf("Container field should contain envoy:v1.20.0, got %q", containerField.Value)
+	if !strings.Contains(containerValue, "envoy:v1.20.0") {
+		t.Errorf("Container field should contain envoy:v1.20.0, got %q", containerValue)
 	}
 }
 
@@ -439,27 +433,23 @@ func TestFormatSlackMessage_WithReplicas(t *testing.T) {
 	attachment := msg.Attachments[0]
 
 	// レプリカフィールドが存在するか確認
-	var replicaField *struct {
-		Title string
-		Value string
-	}
+	var replicaValue string
+	replicaFound := false
 	for _, field := range attachment.Fields {
 		if field.Title == "レプリカ" {
-			replicaField = &struct {
-				Title string
-				Value string
-			}{field.Title, field.Value}
+			replicaValue = field.Value
+			replicaFound = true
 			break
 		}
 	}
 
-	if replicaField == nil {
+	if !replicaFound {
 		t.Fatal("Replica field not found")
 	}
 
 	expectedValue := "Desired: 3, Ready: 2, Current: 3"
-	if replicaField.Value != expectedValue {
-		t.Errorf("Expected replica value %q, got %q", expectedValue, replicaField.Value)
+	if replicaValue != expectedValue {
+		t.Errorf("Expected replica value %q, got %q", expectedValue, replicaValue)
 	}
 }
 

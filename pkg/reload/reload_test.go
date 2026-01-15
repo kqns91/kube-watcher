@@ -10,14 +10,16 @@ import (
 )
 
 func TestNewConfigWatcher(t *testing.T) {
-	// Create temporary config file
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
 	configContent := `
 namespace: default
-resources:
-  - kind: Pod
+watches:
+  - selector:
+      kind: Pod
+    triggers:
+      - imageChange: true
 notifier:
   slack:
     webhookUrl: "https://example.com/webhook"
@@ -47,8 +49,11 @@ func TestConfigWatcher_AddCallback(t *testing.T) {
 
 	configContent := `
 namespace: default
-resources:
-  - kind: Pod
+watches:
+  - selector:
+      kind: Pod
+    triggers:
+      - imageChange: true
 notifier:
   slack:
     webhookUrl: "https://example.com/webhook"
@@ -78,8 +83,11 @@ func TestConfigWatcher_Reload(t *testing.T) {
 
 	initialConfig := `
 namespace: default
-resources:
-  - kind: Pod
+watches:
+  - selector:
+      kind: Pod
+    triggers:
+      - imageChange: true
 notifier:
   slack:
     webhookUrl: "https://example.com/webhook"
@@ -111,9 +119,15 @@ notifier:
 	// Update config file
 	updatedConfig := `
 namespace: production
-resources:
-  - kind: Pod
-  - kind: Deployment
+watches:
+  - selector:
+      kind: Pod
+    triggers:
+      - imageChange: true
+  - selector:
+      kind: Deployment
+    triggers:
+      - imageChange: true
 notifier:
   slack:
     webhookUrl: "https://example.com/webhook"
@@ -139,8 +153,11 @@ func TestConfigWatcher_MultipleCallbacks(t *testing.T) {
 
 	configContent := `
 namespace: default
-resources:
-  - kind: Pod
+watches:
+  - selector:
+      kind: Pod
+    triggers:
+      - imageChange: true
 notifier:
   slack:
     webhookUrl: "https://example.com/webhook"

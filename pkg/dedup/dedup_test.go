@@ -10,11 +10,12 @@ func TestNewDeduplicator(t *testing.T) {
 	maxSize := 100
 
 	d := NewDeduplicator(ttl, maxSize)
-	defer d.Stop()
-
+	// NewDeduplicator always returns non-nil, but verify
 	if d == nil {
 		t.Fatal("NewDeduplicator returned nil")
+		return // unreachable, but helps staticcheck
 	}
+	defer d.Stop()
 
 	if d.ttl != ttl {
 		t.Errorf("Expected TTL %v, got %v", ttl, d.ttl)

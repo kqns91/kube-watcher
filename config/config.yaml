@@ -1,25 +1,27 @@
 # Namespace to monitor (required)
 namespace: "default"
 
-# Resources to watch
-resources:
-  - kind: Pod
-  - kind: Deployment
-  - kind: Service
+# Watches define what resources to monitor and when to notify
+watches:
+  - selector:
+      kind: Pod
+      # Optional: filter by name
+      # name: "my-app"
+      # Optional: filter by labels
+      # labels:
+      #   app: "web"
+    triggers:
+      - imageChange: true
 
-# Filters for notifications
-filters:
-  - resource: Pod
-    eventTypes: ["ADDED", "DELETED", "UPDATED"]
-    # Optional: filter by labels
-    # labels:
-    #   app: "web"
+  - selector:
+      kind: Deployment
+    triggers:
+      - imageChange: true
 
-  - resource: Deployment
-    eventTypes: ["ADDED", "DELETED", "UPDATED"]
-
-  - resource: Service
-    eventTypes: ["ADDED", "DELETED"]
+  - selector:
+      kind: CronJob
+    triggers:
+      - imageChange: true
 
 # Notification configuration
 notifier:

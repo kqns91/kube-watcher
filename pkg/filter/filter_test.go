@@ -7,289 +7,246 @@ import (
 	"github.com/kqns91/kube-watcher/pkg/watcher"
 )
 
-func TestFilter_ShouldProcess_EventTypeFiltering(t *testing.T) {
+func TestFilter_ShouldProcess(t *testing.T) {
 	tests := []struct {
-		name          string
-		filterConfig  *config.FilterConfig
-		event         *watcher.Event
-		shouldProcess bool
+		name   string
+		config *config.Config
+		event  *watcher.Event
+		want   bool
 	}{
 		{
-			name: "DELETED event matches DELETED filter",
-			filterConfig: &config.FilterConfig{
-				Resource:   "Pod",
-				EventTypes: []string{"DELETED"},
+			name: "Pod ADDED event with imageChange trigger",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "Pod"},
+						Triggers: []config.Trigger{{ImageChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "Pod", Name: "test-pod", EventType: "ADDED"},
+			want:  true,
+		},
+		{
+			name: "Pod UPDATED event should not trigger (not ADDED)",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "Pod"},
+						Triggers: []config.Trigger{{ImageChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "Pod", Name: "test-pod", EventType: "UPDATED"},
+			want:  false,
+		},
+		{
+			name: "no watch configured for kind",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "Deployment"},
+						Triggers: []config.Trigger{{ImageChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "Pod", Name: "test-pod", EventType: "ADDED"},
+			want:  false,
+		},
+		{
+			name: "matching watch with label selector",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{
+							Kind:   "Pod",
+							Labels: map[string]string{"app": "web"},
+						},
+						Triggers: []config.Trigger{{ImageChange: true}},
+					},
+				},
 			},
 			event: &watcher.Event{
 				Kind:      "Pod",
-				EventType: "DELETED",
+				Name:      "test-pod",
+				EventType: "ADDED",
+				Labels:    map[string]string{"app": "web", "env": "prod"},
 			},
-			shouldProcess: true,
+			want: true,
 		},
 		{
-			name: "ADDED event does not match DELETED filter",
-			filterConfig: &config.FilterConfig{
-				Resource:   "Pod",
-				EventTypes: []string{"DELETED"},
+			name: "non-matching label selector",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{
+							Kind:   "Pod",
+							Labels: map[string]string{"app": "api"},
+						},
+						Triggers: []config.Trigger{{ImageChange: true}},
+					},
+				},
 			},
 			event: &watcher.Event{
 				Kind:      "Pod",
+				Name:      "test-pod",
 				EventType: "ADDED",
+				Labels:    map[string]string{"app": "web"},
 			},
-			shouldProcess: false,
+			want: false,
 		},
 		{
-			name: "UPDATED event matches multiple event types filter",
-			filterConfig: &config.FilterConfig{
-				Resource:   "Deployment",
-				EventTypes: []string{"ADDED", "UPDATED", "DELETED"},
+			name: "Deployment UPDATED with image change",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{
+							Kind: "Deployment",
+							Name: "my-app",
+						},
+						Triggers: []config.Trigger{{ImageChange: true}},
+					},
+				},
 			},
-			event: &watcher.Event{
-				Kind:      "Deployment",
-				EventType: "UPDATED",
-			},
-			shouldProcess: true,
+			event: &watcher.Event{Kind: "Deployment", Name: "my-app", EventType: "UPDATED", ImageChanged: true},
+			want:  true,
 		},
 		{
-			name: "empty event types filter allows all events",
-			filterConfig: &config.FilterConfig{
-				Resource:   "Service",
-				EventTypes: []string{},
+			name: "Deployment UPDATED without image change",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{
+							Kind: "Deployment",
+							Name: "my-app",
+						},
+						Triggers: []config.Trigger{{ImageChange: true}},
+					},
+				},
 			},
-			event: &watcher.Event{
-				Kind:      "Service",
-				EventType: "ADDED",
+			event: &watcher.Event{Kind: "Deployment", Name: "my-app", EventType: "UPDATED", ImageChanged: false},
+			want:  false,
+		},
+		{
+			name: "CronJob UPDATED with image change",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "CronJob"},
+						Triggers: []config.Trigger{{ImageChange: true}},
+					},
+				},
 			},
-			shouldProcess: true,
+			event: &watcher.Event{Kind: "CronJob", Name: "my-cronjob", EventType: "UPDATED", ImageChanged: true},
+			want:  true,
+		},
+		{
+			name: "CronJob UPDATED without image change (regular job run)",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "CronJob"},
+						Triggers: []config.Trigger{{ImageChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "CronJob", Name: "my-cronjob", EventType: "UPDATED", ImageChanged: false},
+			want:  false,
+		},
+		{
+			name: "non-matching name selector",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{
+							Kind: "Deployment",
+							Name: "my-app",
+						},
+						Triggers: []config.Trigger{{ImageChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "Deployment", Name: "other-app", EventType: "UPDATED", ImageChanged: true},
+			want:  false,
+		},
+		{
+			name: "no enabled triggers",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "Pod"},
+						Triggers: []config.Trigger{{ImageChange: false}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "Pod", Name: "test-pod", EventType: "ADDED"},
+			want:  false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.Config{
-				Filters: []config.FilterConfig{*tt.filterConfig},
-			}
-			f := NewFilter(cfg)
-
+			f := NewFilter(tt.config)
 			got := f.ShouldProcess(tt.event)
-			if got != tt.shouldProcess {
-				t.Errorf("ShouldProcess() = %v, want %v", got, tt.shouldProcess)
+			if got != tt.want {
+				t.Errorf("ShouldProcess() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestFilter_ShouldProcess_LabelFiltering(t *testing.T) {
+func TestFilter_MatchesLabels(t *testing.T) {
+	f := NewFilter(&config.Config{})
+
 	tests := []struct {
-		name          string
-		filterConfig  *config.FilterConfig
-		event         *watcher.Event
-		shouldProcess bool
+		name           string
+		eventLabels    map[string]string
+		requiredLabels map[string]string
+		want           bool
 	}{
 		{
-			name: "matching single label",
-			filterConfig: &config.FilterConfig{
-				Resource:   "Pod",
-				EventTypes: []string{"DELETED"},
-				Labels: map[string]string{
-					"app": "web",
-				},
-			},
-			event: &watcher.Event{
-				Kind:      "Pod",
-				EventType: "DELETED",
-				Labels: map[string]string{
-					"app": "web",
-				},
-			},
-			shouldProcess: true,
+			name:           "all labels match",
+			eventLabels:    map[string]string{"app": "web", "env": "prod"},
+			requiredLabels: map[string]string{"app": "web"},
+			want:           true,
 		},
 		{
-			name: "non-matching label value",
-			filterConfig: &config.FilterConfig{
-				Resource:   "Pod",
-				EventTypes: []string{"DELETED"},
-				Labels: map[string]string{
-					"app": "web",
-				},
-			},
-			event: &watcher.Event{
-				Kind:      "Pod",
-				EventType: "DELETED",
-				Labels: map[string]string{
-					"app": "api",
-				},
-			},
-			shouldProcess: false,
+			name:           "multiple labels match",
+			eventLabels:    map[string]string{"app": "web", "env": "prod", "tier": "frontend"},
+			requiredLabels: map[string]string{"app": "web", "env": "prod"},
+			want:           true,
 		},
 		{
-			name: "matching multiple labels",
-			filterConfig: &config.FilterConfig{
-				Resource:   "Pod",
-				EventTypes: []string{"DELETED"},
-				Labels: map[string]string{
-					"app":         "web",
-					"environment": "production",
-				},
-			},
-			event: &watcher.Event{
-				Kind:      "Pod",
-				EventType: "DELETED",
-				Labels: map[string]string{
-					"app":         "web",
-					"environment": "production",
-					"version":     "v1.0.0",
-				},
-			},
-			shouldProcess: true,
+			name:           "label missing",
+			eventLabels:    map[string]string{"env": "prod"},
+			requiredLabels: map[string]string{"app": "web"},
+			want:           false,
 		},
 		{
-			name: "missing required label",
-			filterConfig: &config.FilterConfig{
-				Resource:   "Pod",
-				EventTypes: []string{"DELETED"},
-				Labels: map[string]string{
-					"app":         "web",
-					"environment": "production",
-				},
-			},
-			event: &watcher.Event{
-				Kind:      "Pod",
-				EventType: "DELETED",
-				Labels: map[string]string{
-					"app": "web",
-				},
-			},
-			shouldProcess: false,
+			name:           "label value mismatch",
+			eventLabels:    map[string]string{"app": "api"},
+			requiredLabels: map[string]string{"app": "web"},
+			want:           false,
 		},
 		{
-			name: "empty label filter allows all",
-			filterConfig: &config.FilterConfig{
-				Resource:   "Pod",
-				EventTypes: []string{"DELETED"},
-				Labels:     map[string]string{},
-			},
-			event: &watcher.Event{
-				Kind:      "Pod",
-				EventType: "DELETED",
-				Labels: map[string]string{
-					"app": "web",
-				},
-			},
-			shouldProcess: true,
+			name:           "empty required labels",
+			eventLabels:    map[string]string{"app": "web"},
+			requiredLabels: map[string]string{},
+			want:           true,
+		},
+		{
+			name:           "nil event labels",
+			eventLabels:    nil,
+			requiredLabels: map[string]string{"app": "web"},
+			want:           false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.Config{
-				Filters: []config.FilterConfig{*tt.filterConfig},
-			}
-			f := NewFilter(cfg)
-
-			got := f.ShouldProcess(tt.event)
-			if got != tt.shouldProcess {
-				t.Errorf("ShouldProcess() = %v, want %v", got, tt.shouldProcess)
-			}
-		})
-	}
-}
-
-func TestFilter_ShouldProcess_NoFilterConfig(t *testing.T) {
-	// フィルター設定がない場合は、すべてのイベントを通過させるべき
-	cfg := &config.Config{
-		Filters: []config.FilterConfig{},
-	}
-	f := NewFilter(cfg)
-
-	event := &watcher.Event{
-		Kind:      "Pod",
-		EventType: "ADDED",
-		Labels: map[string]string{
-			"app": "test",
-		},
-	}
-
-	got := f.ShouldProcess(event)
-	if !got {
-		t.Errorf("ShouldProcess() = %v, want true (no filter should allow all)", got)
-	}
-}
-
-func TestFilter_ShouldProcess_CombinedFiltering(t *testing.T) {
-	// イベントタイプとラベルの両方の条件を満たす必要がある
-	tests := []struct {
-		name          string
-		filterConfig  *config.FilterConfig
-		event         *watcher.Event
-		shouldProcess bool
-	}{
-		{
-			name: "both event type and labels match",
-			filterConfig: &config.FilterConfig{
-				Resource:   "Pod",
-				EventTypes: []string{"DELETED"},
-				Labels: map[string]string{
-					"environment": "production",
-				},
-			},
-			event: &watcher.Event{
-				Kind:      "Pod",
-				EventType: "DELETED",
-				Labels: map[string]string{
-					"environment": "production",
-				},
-			},
-			shouldProcess: true,
-		},
-		{
-			name: "event type matches but labels do not",
-			filterConfig: &config.FilterConfig{
-				Resource:   "Pod",
-				EventTypes: []string{"DELETED"},
-				Labels: map[string]string{
-					"environment": "production",
-				},
-			},
-			event: &watcher.Event{
-				Kind:      "Pod",
-				EventType: "DELETED",
-				Labels: map[string]string{
-					"environment": "development",
-				},
-			},
-			shouldProcess: false,
-		},
-		{
-			name: "labels match but event type does not",
-			filterConfig: &config.FilterConfig{
-				Resource:   "Pod",
-				EventTypes: []string{"DELETED"},
-				Labels: map[string]string{
-					"environment": "production",
-				},
-			},
-			event: &watcher.Event{
-				Kind:      "Pod",
-				EventType: "ADDED",
-				Labels: map[string]string{
-					"environment": "production",
-				},
-			},
-			shouldProcess: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.Config{
-				Filters: []config.FilterConfig{*tt.filterConfig},
-			}
-			f := NewFilter(cfg)
-
-			got := f.ShouldProcess(tt.event)
-			if got != tt.shouldProcess {
-				t.Errorf("ShouldProcess() = %v, want %v", got, tt.shouldProcess)
+			got := f.matchesLabels(tt.eventLabels, tt.requiredLabels)
+			if got != tt.want {
+				t.Errorf("matchesLabels() = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -10,25 +10,30 @@ import (
 
 // Config represents the application configuration
 type Config struct {
-	Namespace      string              `yaml:"namespace"`
-	Resources      []ResourceConfig    `yaml:"resources"`
-	Filters        []FilterConfig      `yaml:"filters"`
-	Notifier       NotifierConfig      `yaml:"notifier"`
-	Deduplication  DeduplicationConfig `yaml:"deduplication,omitempty"`
-	Batching       BatchingConfig      `yaml:"batching,omitempty"`
+	Namespace     string              `yaml:"namespace"`
+	Watches       []WatchConfig       `yaml:"watches"`
+	Notifier      NotifierConfig      `yaml:"notifier"`
+	Deduplication DeduplicationConfig `yaml:"deduplication,omitempty"`
+	Batching      BatchingConfig      `yaml:"batching,omitempty"`
 }
 
-// ResourceConfig defines which Kubernetes resources to watch
-type ResourceConfig struct {
-	Kind string `yaml:"kind"`
+// WatchConfig defines what to watch and when to trigger notifications
+type WatchConfig struct {
+	Selector WatchSelector `yaml:"selector"`
+	Triggers []Trigger     `yaml:"triggers"`
 }
 
-// FilterConfig defines conditions for filtering events
-type FilterConfig struct {
-	Resource   string            `yaml:"resource"`
-	EventTypes []string          `yaml:"eventTypes,omitempty"`
-	Labels     map[string]string `yaml:"labels,omitempty"`
-	Expression string            `yaml:"expression,omitempty"` // CEL expression for advanced filtering
+// WatchSelector defines which resources to watch
+type WatchSelector struct {
+	Kind   string            `yaml:"kind"`
+	Name   string            `yaml:"name,omitempty"`
+	Labels map[string]string `yaml:"labels,omitempty"`
+}
+
+// Trigger defines when to send notifications
+type Trigger struct {
+	ImageChange bool `yaml:"imageChange,omitempty"`
+	// EnvChange bool `yaml:"envChange,omitempty"` // Future: v0.7.0
 }
 
 // NotifierConfig defines notification settings
@@ -89,8 +94,29 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("namespace is required")
 	}
 
-	if len(c.Resources) == 0 {
-		return fmt.Errorf("at least one resource must be configured")
+	if len(c.Watches) == 0 {
+		return fmt.Errorf("at least one watch must be configured")
+	}
+
+	// Validate watch configurations
+	for i, w := range c.Watches {
+		if w.Selector.Kind == "" {
+			return fmt.Errorf("watch[%d].selector.kind is required", i)
+		}
+		if len(w.Triggers) == 0 {
+			return fmt.Errorf("watch[%d].triggers must have at least one trigger", i)
+		}
+		// Validate triggers have at least one enabled
+		hasTrigger := false
+		for _, t := range w.Triggers {
+			if t.ImageChange {
+				hasTrigger = true
+				break
+			}
+		}
+		if !hasTrigger {
+			return fmt.Errorf("watch[%d].triggers must have at least one trigger enabled (e.g., imageChange: true)", i)
+		}
 	}
 
 	if c.Notifier.Slack.WebhookURL == "" {
@@ -148,12 +174,25 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// GetFilterForResource returns the filter configuration for a given resource kind
-func (c *Config) GetFilterForResource(kind string) *FilterConfig {
-	for i := range c.Filters {
-		if c.Filters[i].Resource == kind {
-			return &c.Filters[i]
+// GetWatchForResource returns the watch configuration for a given resource kind
+func (c *Config) GetWatchForResource(kind string) *WatchConfig {
+	for i := range c.Watches {
+		if c.Watches[i].Selector.Kind == kind {
+			return &c.Watches[i]
 		}
 	}
 	return nil
+}
+
+// GetWatchedKinds returns a list of resource kinds that are being watched
+func (c *Config) GetWatchedKinds() []string {
+	kinds := make([]string, 0, len(c.Watches))
+	seen := make(map[string]bool)
+	for _, w := range c.Watches {
+		if !seen[w.Selector.Kind] {
+			kinds = append(kinds, w.Selector.Kind)
+			seen[w.Selector.Kind] = true
+		}
+	}
+	return kinds
 }

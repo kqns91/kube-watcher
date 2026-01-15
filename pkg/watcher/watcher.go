@@ -8,6 +8,7 @@ import (
 
 	"github.com/kqns91/kube-watcher/pkg/config"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -48,6 +49,11 @@ type Event struct {
 	Containers  []ContainerInfo
 	Replicas    *ReplicaInfo
 	ServiceType string
+
+	// Image change detection
+	ImageChanged bool
+	OldImages    []ContainerInfo
+	NewImages    []ContainerInfo
 }
 
 // EventHandler is a function that handles resource events
@@ -97,10 +103,10 @@ func (w *Watcher) Start(ctx context.Context) error {
 		informers.WithNamespace(w.config.Namespace),
 	)
 
-	// Register informers for each configured resource
-	for _, resource := range w.config.Resources {
-		if err := w.registerInformer(factory, resource.Kind); err != nil {
-			return fmt.Errorf("failed to register informer for %s: %w", resource.Kind, err)
+	// Register informers for each watched resource kind
+	for _, kind := range w.config.GetWatchedKinds() {
+		if err := w.registerInformer(factory, kind); err != nil {
+			return fmt.Errorf("failed to register informer for %s: %w", kind, err)
 		}
 	}
 
@@ -144,6 +150,9 @@ func (w *Watcher) registerInformer(factory informers.SharedInformerFactory, kind
 	case "DaemonSet":
 		informer := factory.Apps().V1().DaemonSets().Informer()
 		informer.AddEventHandler(w.createEventHandler("DaemonSet"))
+	case "CronJob":
+		informer := factory.Batch().V1().CronJobs().Informer()
+		informer.AddEventHandler(w.createEventHandler("CronJob"))
 	default:
 		return fmt.Errorf("unsupported resource kind: %s", kind)
 	}
@@ -161,12 +170,16 @@ func (w *Watcher) createEventHandler(kind string) cache.ResourceEventHandler {
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			// Skip if there's no meaningful change
+			// Check for significant change and image change
+			imageChanged, oldImages, newImages := w.detectImageChange(oldObj, newObj)
 			if !w.hasSignificantChange(oldObj, newObj) {
 				return
 			}
 			event := w.convertToEvent(newObj, kind, "UPDATED")
 			if event != nil {
+				event.ImageChanged = imageChanged
+				event.OldImages = oldImages
+				event.NewImages = newImages
 				w.handler(event)
 			}
 		},
@@ -177,6 +190,50 @@ func (w *Watcher) createEventHandler(kind string) cache.ResourceEventHandler {
 			}
 		},
 	}
+}
+
+// detectImageChange detects if container images have changed between old and new objects
+func (w *Watcher) detectImageChange(oldObj, newObj interface{}) (changed bool, oldImages, newImages []ContainerInfo) {
+	getContainers := func(obj interface{}) []ContainerInfo {
+		var containers []ContainerInfo
+		switch o := obj.(type) {
+		case *corev1.Pod:
+			for _, c := range o.Spec.Containers {
+				containers = append(containers, ContainerInfo{Name: c.Name, Image: c.Image})
+			}
+		case *appsv1.Deployment:
+			for _, c := range o.Spec.Template.Spec.Containers {
+				containers = append(containers, ContainerInfo{Name: c.Name, Image: c.Image})
+			}
+		case *appsv1.StatefulSet:
+			for _, c := range o.Spec.Template.Spec.Containers {
+				containers = append(containers, ContainerInfo{Name: c.Name, Image: c.Image})
+			}
+		case *appsv1.DaemonSet:
+			for _, c := range o.Spec.Template.Spec.Containers {
+				containers = append(containers, ContainerInfo{Name: c.Name, Image: c.Image})
+			}
+		case *batchv1.CronJob:
+			for _, c := range o.Spec.JobTemplate.Spec.Template.Spec.Containers {
+				containers = append(containers, ContainerInfo{Name: c.Name, Image: c.Image})
+			}
+		}
+		return containers
+	}
+
+	oldImages = getContainers(oldObj)
+	newImages = getContainers(newObj)
+
+	// Check if images changed
+	if len(oldImages) != len(newImages) {
+		return true, oldImages, newImages
+	}
+	for i := range oldImages {
+		if oldImages[i].Image != newImages[i].Image {
+			return true, oldImages, newImages
+		}
+	}
+	return false, oldImages, newImages
 }
 
 // hasSignificantChange checks if there's a significant change between old and new objects
@@ -214,7 +271,8 @@ func (w *Watcher) hasSignificantChange(oldObj, newObj interface{}) bool {
 	case *appsv1.Deployment:
 		newTyped := newObj.(*appsv1.Deployment)
 		// Notify on replica count changes
-		if *oldTyped.Spec.Replicas != *newTyped.Spec.Replicas {
+		if oldTyped.Spec.Replicas != nil && newTyped.Spec.Replicas != nil &&
+			*oldTyped.Spec.Replicas != *newTyped.Spec.Replicas {
 			return true
 		}
 		// Notify on ready replica count changes
@@ -247,7 +305,8 @@ func (w *Watcher) hasSignificantChange(oldObj, newObj interface{}) bool {
 	case *appsv1.ReplicaSet:
 		newTyped := newObj.(*appsv1.ReplicaSet)
 		// Notify on replica count changes
-		if *oldTyped.Spec.Replicas != *newTyped.Spec.Replicas {
+		if oldTyped.Spec.Replicas != nil && newTyped.Spec.Replicas != nil &&
+			*oldTyped.Spec.Replicas != *newTyped.Spec.Replicas {
 			return true
 		}
 		if oldTyped.Status.ReadyReplicas != newTyped.Status.ReadyReplicas {
@@ -258,16 +317,54 @@ func (w *Watcher) hasSignificantChange(oldObj, newObj interface{}) bool {
 	case *appsv1.StatefulSet:
 		newTyped := newObj.(*appsv1.StatefulSet)
 		// Notify on replica count changes
-		if *oldTyped.Spec.Replicas != *newTyped.Spec.Replicas {
+		if oldTyped.Spec.Replicas != nil && newTyped.Spec.Replicas != nil &&
+			*oldTyped.Spec.Replicas != *newTyped.Spec.Replicas {
 			return true
 		}
 		if oldTyped.Status.ReadyReplicas != newTyped.Status.ReadyReplicas {
 			return true
 		}
+		// Check for image changes
+		if len(oldTyped.Spec.Template.Spec.Containers) != len(newTyped.Spec.Template.Spec.Containers) {
+			return true
+		}
+		for i := range oldTyped.Spec.Template.Spec.Containers {
+			if oldTyped.Spec.Template.Spec.Containers[i].Image != newTyped.Spec.Template.Spec.Containers[i].Image {
+				return true
+			}
+		}
+		return false
+
+	case *appsv1.DaemonSet:
+		newTyped := newObj.(*appsv1.DaemonSet)
+		// Only notify on container image changes
+		if len(oldTyped.Spec.Template.Spec.Containers) != len(newTyped.Spec.Template.Spec.Containers) {
+			return true
+		}
+		for i := range oldTyped.Spec.Template.Spec.Containers {
+			if oldTyped.Spec.Template.Spec.Containers[i].Image != newTyped.Spec.Template.Spec.Containers[i].Image {
+				return true
+			}
+		}
+		return false
+
+	case *batchv1.CronJob:
+		newTyped := newObj.(*batchv1.CronJob)
+		// Only notify on container image changes in job template
+		oldContainers := oldTyped.Spec.JobTemplate.Spec.Template.Spec.Containers
+		newContainers := newTyped.Spec.JobTemplate.Spec.Template.Spec.Containers
+		if len(oldContainers) != len(newContainers) {
+			return true
+		}
+		for i := range oldContainers {
+			if oldContainers[i].Image != newContainers[i].Image {
+				return true
+			}
+		}
 		return false
 
 	default:
-		// For ConfigMap, Secret, and DaemonSet, compare ResourceVersion only
+		// For ConfigMap, Secret, etc., compare ResourceVersion only
 		// This reduces noise significantly
 		return false
 	}
@@ -303,10 +400,12 @@ func (w *Watcher) convertToEvent(obj interface{}, kind, eventType string) *Event
 	case *appsv1.Deployment:
 		meta = o
 		labels = o.Labels
-		event.Replicas = &ReplicaInfo{
-			Desired: *o.Spec.Replicas,
-			Ready:   o.Status.ReadyReplicas,
-			Current: o.Status.Replicas,
+		if o.Spec.Replicas != nil {
+			event.Replicas = &ReplicaInfo{
+				Desired: *o.Spec.Replicas,
+				Ready:   o.Status.ReadyReplicas,
+				Current: o.Status.Replicas,
+			}
 		}
 		// Extract container information from template
 		for _, container := range o.Spec.Template.Spec.Containers {
@@ -341,24 +440,46 @@ func (w *Watcher) convertToEvent(obj interface{}, kind, eventType string) *Event
 	case *appsv1.ReplicaSet:
 		meta = o
 		labels = o.Labels
-		event.Replicas = &ReplicaInfo{
-			Desired: *o.Spec.Replicas,
-			Ready:   o.Status.ReadyReplicas,
-			Current: o.Status.Replicas,
+		if o.Spec.Replicas != nil {
+			event.Replicas = &ReplicaInfo{
+				Desired: *o.Spec.Replicas,
+				Ready:   o.Status.ReadyReplicas,
+				Current: o.Status.Replicas,
+			}
 		}
 
 	case *appsv1.StatefulSet:
 		meta = o
 		labels = o.Labels
-		event.Replicas = &ReplicaInfo{
-			Desired: *o.Spec.Replicas,
-			Ready:   o.Status.ReadyReplicas,
-			Current: o.Status.Replicas,
+		if o.Spec.Replicas != nil {
+			event.Replicas = &ReplicaInfo{
+				Desired: *o.Spec.Replicas,
+				Ready:   o.Status.ReadyReplicas,
+				Current: o.Status.Replicas,
+			}
 		}
 
 	case *appsv1.DaemonSet:
 		meta = o
 		labels = o.Labels
+		// Extract container information from template
+		for _, container := range o.Spec.Template.Spec.Containers {
+			event.Containers = append(event.Containers, ContainerInfo{
+				Name:  container.Name,
+				Image: container.Image,
+			})
+		}
+
+	case *batchv1.CronJob:
+		meta = o
+		labels = o.Labels
+		// Extract container information from job template
+		for _, container := range o.Spec.JobTemplate.Spec.Template.Spec.Containers {
+			event.Containers = append(event.Containers, ContainerInfo{
+				Name:  container.Name,
+				Image: container.Image,
+			})
+		}
 
 	default:
 		return nil
