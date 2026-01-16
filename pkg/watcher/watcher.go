@@ -25,6 +25,13 @@ type ContainerInfo struct {
 	Image string
 }
 
+// EnvInfo represents environment variables for a container
+type EnvInfo struct {
+	ContainerName string
+	Env           []corev1.EnvVar
+	EnvFrom       []corev1.EnvFromSource
+}
+
 // ReplicaInfo represents replica information
 type ReplicaInfo struct {
 	Desired int32
@@ -54,6 +61,11 @@ type Event struct {
 	ImageChanged bool
 	OldImages    []ContainerInfo
 	NewImages    []ContainerInfo
+
+	// Environment change detection
+	EnvChanged bool
+	OldEnv     []EnvInfo
+	NewEnv     []EnvInfo
 }
 
 // EventHandler is a function that handles resource events
@@ -170,9 +182,10 @@ func (w *Watcher) createEventHandler(kind string) cache.ResourceEventHandler {
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			// Check for significant change and image change
+			// Check for significant change, image change, and env change
 			imageChanged, oldImages, newImages := w.detectImageChange(oldObj, newObj)
-			if !w.hasSignificantChange(oldObj, newObj) {
+			envChanged, oldEnv, newEnv := w.detectEnvChange(oldObj, newObj)
+			if !w.hasSignificantChange(oldObj, newObj) && !envChanged {
 				return
 			}
 			event := w.convertToEvent(newObj, kind, "UPDATED")
@@ -180,6 +193,9 @@ func (w *Watcher) createEventHandler(kind string) cache.ResourceEventHandler {
 				event.ImageChanged = imageChanged
 				event.OldImages = oldImages
 				event.NewImages = newImages
+				event.EnvChanged = envChanged
+				event.OldEnv = oldEnv
+				event.NewEnv = newEnv
 				w.handler(event)
 			}
 		},
@@ -190,6 +206,151 @@ func (w *Watcher) createEventHandler(kind string) cache.ResourceEventHandler {
 			}
 		},
 	}
+}
+
+// envVarsEqual compares two slices of EnvVar for equality
+func envVarsEqual(a, b []corev1.EnvVar) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name || a[i].Value != b[i].Value {
+			return false
+		}
+		// Compare ValueFrom pointers
+		if (a[i].ValueFrom == nil) != (b[i].ValueFrom == nil) {
+			return false
+		}
+		if a[i].ValueFrom != nil && b[i].ValueFrom != nil {
+			// Compare ConfigMapKeyRef
+			if (a[i].ValueFrom.ConfigMapKeyRef == nil) != (b[i].ValueFrom.ConfigMapKeyRef == nil) {
+				return false
+			}
+			if a[i].ValueFrom.ConfigMapKeyRef != nil && b[i].ValueFrom.ConfigMapKeyRef != nil {
+				if a[i].ValueFrom.ConfigMapKeyRef.Name != b[i].ValueFrom.ConfigMapKeyRef.Name ||
+					a[i].ValueFrom.ConfigMapKeyRef.Key != b[i].ValueFrom.ConfigMapKeyRef.Key {
+					return false
+				}
+			}
+			// Compare SecretKeyRef
+			if (a[i].ValueFrom.SecretKeyRef == nil) != (b[i].ValueFrom.SecretKeyRef == nil) {
+				return false
+			}
+			if a[i].ValueFrom.SecretKeyRef != nil && b[i].ValueFrom.SecretKeyRef != nil {
+				if a[i].ValueFrom.SecretKeyRef.Name != b[i].ValueFrom.SecretKeyRef.Name ||
+					a[i].ValueFrom.SecretKeyRef.Key != b[i].ValueFrom.SecretKeyRef.Key {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+// envFromEqual compares two slices of EnvFromSource for equality
+func envFromEqual(a, b []corev1.EnvFromSource) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Prefix != b[i].Prefix {
+			return false
+		}
+		// Compare ConfigMapRef
+		if (a[i].ConfigMapRef == nil) != (b[i].ConfigMapRef == nil) {
+			return false
+		}
+		if a[i].ConfigMapRef != nil && b[i].ConfigMapRef != nil {
+			if a[i].ConfigMapRef.Name != b[i].ConfigMapRef.Name {
+				return false
+			}
+		}
+		// Compare SecretRef
+		if (a[i].SecretRef == nil) != (b[i].SecretRef == nil) {
+			return false
+		}
+		if a[i].SecretRef != nil && b[i].SecretRef != nil {
+			if a[i].SecretRef.Name != b[i].SecretRef.Name {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// envInfoEqual compares two slices of EnvInfo for equality
+func envInfoEqual(a, b []EnvInfo) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].ContainerName != b[i].ContainerName {
+			return false
+		}
+		if !envVarsEqual(a[i].Env, b[i].Env) {
+			return false
+		}
+		if !envFromEqual(a[i].EnvFrom, b[i].EnvFrom) {
+			return false
+		}
+	}
+	return true
+}
+
+// detectEnvChange detects if container environment variables have changed between old and new objects
+func (w *Watcher) detectEnvChange(oldObj, newObj interface{}) (changed bool, oldEnv, newEnv []EnvInfo) {
+	getContainerEnv := func(obj interface{}) []EnvInfo {
+		var envList []EnvInfo
+		switch o := obj.(type) {
+		case *corev1.Pod:
+			for _, c := range o.Spec.Containers {
+				envList = append(envList, EnvInfo{
+					ContainerName: c.Name,
+					Env:           c.Env,
+					EnvFrom:       c.EnvFrom,
+				})
+			}
+		case *appsv1.Deployment:
+			for _, c := range o.Spec.Template.Spec.Containers {
+				envList = append(envList, EnvInfo{
+					ContainerName: c.Name,
+					Env:           c.Env,
+					EnvFrom:       c.EnvFrom,
+				})
+			}
+		case *appsv1.StatefulSet:
+			for _, c := range o.Spec.Template.Spec.Containers {
+				envList = append(envList, EnvInfo{
+					ContainerName: c.Name,
+					Env:           c.Env,
+					EnvFrom:       c.EnvFrom,
+				})
+			}
+		case *appsv1.DaemonSet:
+			for _, c := range o.Spec.Template.Spec.Containers {
+				envList = append(envList, EnvInfo{
+					ContainerName: c.Name,
+					Env:           c.Env,
+					EnvFrom:       c.EnvFrom,
+				})
+			}
+		case *batchv1.CronJob:
+			for _, c := range o.Spec.JobTemplate.Spec.Template.Spec.Containers {
+				envList = append(envList, EnvInfo{
+					ContainerName: c.Name,
+					Env:           c.Env,
+					EnvFrom:       c.EnvFrom,
+				})
+			}
+		}
+		return envList
+	}
+
+	oldEnv = getContainerEnv(oldObj)
+	newEnv = getContainerEnv(newObj)
+
+	changed = !envInfoEqual(oldEnv, newEnv)
+	return changed, oldEnv, newEnv
 }
 
 // detectImageChange detects if container images have changed between old and new objects

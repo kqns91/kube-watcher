@@ -4,11 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-kube-watcher is a lightweight Kubernetes resource monitoring bot that works with namespace-limited permissions only (no ClusterRole required). It watches Kubernetes resources for **image changes** and sends notifications to Slack.
+kube-watcher is a lightweight Kubernetes resource monitoring bot that works with namespace-limited permissions only (no ClusterRole required). It watches Kubernetes resources for **image changes** and **environment variable changes** and sends notifications to Slack.
 
-## Core Feature (v0.6.0)
+## Core Features
 
-**Primary Purpose**: Notify when container images change in watched workloads.
+### Image Change Detection (v0.6.0)
+
+**Purpose**: Notify when container images change in watched workloads.
 
 | Resource | Detection Method |
 |----------|-----------------|
@@ -17,6 +19,24 @@ kube-watcher is a lightweight Kubernetes resource monitoring bot that works with
 | StatefulSet | UPDATED with image change |
 | DaemonSet | UPDATED with image change |
 | CronJob | UPDATED with image change (not on regular job runs) |
+
+### Environment Variable Change Detection (v0.7.0)
+
+**Purpose**: Notify when container environment variables change in watched workloads.
+
+| Resource | Detection Method |
+|----------|-----------------|
+| Pod | ADDED event (new Pod started) |
+| Deployment | UPDATED with env change |
+| StatefulSet | UPDATED with env change |
+| DaemonSet | UPDATED with env change |
+| CronJob | UPDATED with env change (not on regular job runs) |
+
+**Detectable changes:**
+- `container.Env` additions/modifications/deletions
+- `container.EnvFrom` reference changes (ConfigMap/Secret names)
+
+**Limitation:** Changes to ConfigMap/Secret **contents** are not detected (only reference changes)
 
 ### Configuration Format
 
@@ -28,6 +48,7 @@ watches:
         app: my-app
     triggers:
       - imageChange: true
+        envChange: true    # v0.7.0
 ```
 
 ## Build & Development Commands
@@ -53,7 +74,7 @@ Watcher (K8s informers) → Filter (watches) → Deduplicator (LRU) → Batcher 
 
 ### Key Components (pkg/)
 
-- **watcher/**: Kubernetes informer-based resource watching with image change detection
+- **watcher/**: Kubernetes informer-based resource watching with image/env change detection
 - **filter/**: Event filtering based on watches configuration (kind, name, labels, triggers)
 - **dedup/**: LRU cache-based duplicate event suppression
 - **batcher/**: Time-window event batching (detailed/summary/smart modes)
@@ -64,7 +85,7 @@ Watcher (K8s informers) → Filter (watches) → Deduplicator (LRU) → Batcher 
 
 ### Core Type
 
-`watcher.Event` carries all event data through the pipeline: Kind, Namespace, Name, EventType, Labels, ImageChanged flag, OldImages, NewImages, and extracted metadata.
+`watcher.Event` carries all event data through the pipeline: Kind, Namespace, Name, EventType, Labels, ImageChanged, EnvChanged flags, OldImages, NewImages, OldEnv, NewEnv, and extracted metadata.
 
 ### Concurrency Model
 

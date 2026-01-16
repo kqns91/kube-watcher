@@ -33,7 +33,7 @@ type WatchSelector struct {
 // Trigger defines when to send notifications
 type Trigger struct {
 	ImageChange bool `yaml:"imageChange,omitempty"`
-	// EnvChange bool `yaml:"envChange,omitempty"` // Future: v0.7.0
+	EnvChange   bool `yaml:"envChange,omitempty"`
 }
 
 // NotifierConfig defines notification settings
@@ -109,13 +109,13 @@ func (c *Config) Validate() error {
 		// Validate triggers have at least one enabled
 		hasTrigger := false
 		for _, t := range w.Triggers {
-			if t.ImageChange {
+			if t.ImageChange || t.EnvChange {
 				hasTrigger = true
 				break
 			}
 		}
 		if !hasTrigger {
-			return fmt.Errorf("watch[%d].triggers must have at least one trigger enabled (e.g., imageChange: true)", i)
+			return fmt.Errorf("watch[%d].triggers must have at least one trigger enabled (e.g., imageChange: true or envChange: true)", i)
 		}
 	}
 

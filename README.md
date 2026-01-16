@@ -18,6 +18,9 @@ BotKubeやRobustaなどの既存ツールは**ClusterRole**（クラスタ全体
 - **🐳 image変更検知** (v0.6.0): 指定したワークロードのコンテナイメージが変更されたら通知
   - Deployment/StatefulSet/DaemonSet: 新imageのPodが起動した時に通知
   - CronJob: image定義が変わった時に通知（通常のJob実行では通知しない）
+- **🌿 env変更検知** (v0.7.0): 指定したワークロードの環境変数が変更されたら通知
+  - `container.Env` の追加/変更/削除を検知
+  - `container.EnvFrom` の参照先変更（ConfigMap/Secret名）を検知
 - **🔍 柔軟な監視**: Pod、Deployment、CronJobなど複数のリソースタイプに対応
 - **⚙️ watches構文**: シンプルで直感的な監視設定
 - **🎯 スマートな通知**: 不要な通知を削減する高度なフィルタリング
@@ -59,7 +62,7 @@ BotKubeやRobustaなどの既存ツールは**ClusterRole**（クラスタ全体
        │ (informer/watch)
        │
 ┌──────▼──────┐
-│   Watcher   │  リソース変更の検知 + image変更検知
+│   Watcher   │  リソース変更の検知 + image/env変更検知
 └──────┬──────┘
        │
        │ (events)
@@ -156,6 +159,7 @@ releases:
                   app: my-app
               triggers:
                 - imageChange: true
+                  envChange: true
             - selector:
                 kind: CronJob
               triggers:
@@ -305,13 +309,14 @@ namespace: "production"
 
 # watches構文による監視設定
 watches:
-  # Deploymentのimage変更を監視
+  # Deploymentのimage変更とenv変更を監視
   - selector:
       kind: Deployment
       labels:
         app: my-app
     triggers:
       - imageChange: true
+        envChange: true    # v0.7.0で追加
 
   # StatefulSetのimage変更を監視
   - selector:
@@ -337,6 +342,13 @@ watches:
       name: important-pod
     triggers:
       - imageChange: true
+
+  # 環境変数の変更のみを監視する例
+  - selector:
+      kind: Deployment
+      name: config-sensitive-app
+    triggers:
+      - envChange: true    # envChangeのみ
 
 notifier:
   slack:
@@ -382,6 +394,7 @@ batching:
 | フィールド | 説明 | 対象リソース |
 |-----------|------|--------------|
 | `imageChange` | コンテナイメージの変更時に通知 | Pod, Deployment, StatefulSet, DaemonSet, CronJob |
+| `envChange` | 環境変数の変更時に通知 (v0.7.0) | Pod, Deployment, StatefulSet, DaemonSet, CronJob |
 
 ### image変更検知の動作
 
@@ -391,6 +404,30 @@ batching:
 | StatefulSet | 新imageのPodがADDED | 同上 |
 | DaemonSet | 新imageのPodがADDED | 同上 |
 | CronJob | image定義がUPDATED | JobTemplate内のimage定義が変わった時のみ通知（通常のJob実行では通知しない） |
+
+### env変更検知の動作 (v0.7.0)
+
+| リソース | 検知方法 | 説明 |
+|---------|---------|------|
+| Deployment | env定義がUPDATED | `container.Env` や `container.EnvFrom` の変更時に通知 |
+| StatefulSet | env定義がUPDATED | 同上 |
+| DaemonSet | env定義がUPDATED | 同上 |
+| CronJob | env定義がUPDATED | JobTemplate内のenv定義が変わった時のみ通知 |
+| Pod | ADDED | 新しいPodが追加されたタイミングで通知 |
+
+#### 検知対象
+
+- `container.Env` の追加/変更/削除
+  - 環境変数の名前や値の変更
+  - `valueFrom` による ConfigMap/Secret 参照の変更
+- `container.EnvFrom` の参照先変更
+  - ConfigMap 名の変更
+  - Secret 名の変更
+
+#### 制限事項
+
+- ConfigMap/Secret の**中身**の変更は検知不可（参照定義のみ）
+- ConfigMap/Secret の内容変更を検知するには、参照名を変更する必要があります
 
 ### テンプレート変数
 
@@ -420,6 +457,9 @@ batching:
 | `.ImageChanged` | image変更フラグ | Deployment, StatefulSet, DaemonSet, CronJob |
 | `.OldImages` | 変更前のイメージ情報 | 同上 |
 | `.NewImages` | 変更後のイメージ情報 | 同上 |
+| `.EnvChanged` | env変更フラグ (v0.7.0) | Deployment, StatefulSet, DaemonSet, CronJob |
+| `.OldEnv` | 変更前の環境変数情報 (v0.7.0) | 同上 |
+| `.NewEnv` | 変更後の環境変数情報 (v0.7.0) | 同上 |
 
 **注意**: デフォルトでは Slack Attachments 形式で通知が送信されるため、これらの詳細情報は自動的に整形されて表示されます。カスタムテンプレートを使用する場合のみ、これらの変数を明示的に参照する必要があります。
 
@@ -486,7 +526,7 @@ make lint-fix
 ├── pkg/
 │   ├── config/                 # 設定管理
 │   │   └── config.go
-│   ├── watcher/                # Kubernetesリソース監視 + image変更検知
+│   ├── watcher/                # Kubernetesリソース監視 + image/env変更検知
 │   │   └── watcher.go
 │   ├── filter/                 # イベントフィルタリング（watches構文）
 │   │   └── filter.go
@@ -550,6 +590,7 @@ rules:
 - [x] **ConfigMapのホットリロード** - Pod再起動なしで設定を自動反映
 - [x] **イベント集約とバッチ処理** - 複数イベントをまとめて通知、3つのモード対応
 - [x] **image変更検知 + watches構文** (v0.6.0) - 指定したワークロードのimage変更を検知
+- [x] **env変更検知** (v0.7.0) - 指定したワークロードの環境変数変更を検知
 
 ### 将来
 - [ ] 追加の通知先対応（Teams、Discord、汎用Webhook）

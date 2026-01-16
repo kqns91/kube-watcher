@@ -235,6 +235,75 @@ func TestValidate_DefaultTemplate(t *testing.T) {
 	}
 }
 
+func TestValidate_EnvChangeTrigger(t *testing.T) {
+	// envChange: true should be valid
+	cfg := &Config{
+		Namespace: "default",
+		Watches: []WatchConfig{
+			{
+				Selector: WatchSelector{Kind: "Deployment"},
+				Triggers: []Trigger{{EnvChange: true}},
+			},
+		},
+		Notifier: NotifierConfig{
+			Slack: SlackConfig{
+				WebhookURL: "https://example.com",
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("Validate() error = %v, want nil for envChange: true", err)
+	}
+}
+
+func TestValidate_BothTriggersEnabled(t *testing.T) {
+	// Both imageChange and envChange should be valid
+	cfg := &Config{
+		Namespace: "default",
+		Watches: []WatchConfig{
+			{
+				Selector: WatchSelector{Kind: "Deployment"},
+				Triggers: []Trigger{{ImageChange: true, EnvChange: true}},
+			},
+		},
+		Notifier: NotifierConfig{
+			Slack: SlackConfig{
+				WebhookURL: "https://example.com",
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("Validate() error = %v, want nil for both triggers enabled", err)
+	}
+}
+
+func TestValidate_NoTriggersEnabled(t *testing.T) {
+	// Neither imageChange nor envChange enabled should fail
+	cfg := &Config{
+		Namespace: "default",
+		Watches: []WatchConfig{
+			{
+				Selector: WatchSelector{Kind: "Deployment"},
+				Triggers: []Trigger{{ImageChange: false, EnvChange: false}},
+			},
+		},
+		Notifier: NotifierConfig{
+			Slack: SlackConfig{
+				WebhookURL: "https://example.com",
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("Validate() error = nil, want error when no triggers enabled")
+	}
+}
+
 func TestGetWatchForResource(t *testing.T) {
 	cfg := &Config{
 		Watches: []WatchConfig{
@@ -285,6 +354,7 @@ func TestGetWatchForResource(t *testing.T) {
 			} else {
 				if watch == nil {
 					t.Fatal("GetWatchForResource() = nil, want non-nil")
+					return
 				}
 				if watch.Selector.Kind != tt.wantKind {
 					t.Errorf("watch.Selector.Kind = %v, want %v", watch.Selector.Kind, tt.wantKind)
@@ -371,6 +441,7 @@ notifier:
 	podWatch := cfg.GetWatchForResource("Pod")
 	if podWatch == nil {
 		t.Fatal("Pod watch is nil")
+		return
 	}
 
 	if len(podWatch.Selector.Labels) != 2 {
@@ -384,6 +455,7 @@ notifier:
 	deployWatch := cfg.GetWatchForResource("Deployment")
 	if deployWatch == nil {
 		t.Fatal("Deployment watch is nil")
+		return
 	}
 
 	if deployWatch.Selector.Name != "my-app" {

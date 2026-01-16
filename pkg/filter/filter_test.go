@@ -182,6 +182,150 @@ func TestFilter_ShouldProcess(t *testing.T) {
 			event: &watcher.Event{Kind: "Pod", Name: "test-pod", EventType: "ADDED"},
 			want:  false,
 		},
+		// envChange trigger tests
+		{
+			name: "Pod ADDED event with envChange trigger",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "Pod"},
+						Triggers: []config.Trigger{{EnvChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "Pod", Name: "test-pod", EventType: "ADDED"},
+			want:  true,
+		},
+		{
+			name: "Deployment UPDATED with env change",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "Deployment"},
+						Triggers: []config.Trigger{{EnvChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "Deployment", Name: "my-app", EventType: "UPDATED", EnvChanged: true},
+			want:  true,
+		},
+		{
+			name: "Deployment UPDATED without env change",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "Deployment"},
+						Triggers: []config.Trigger{{EnvChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "Deployment", Name: "my-app", EventType: "UPDATED", EnvChanged: false},
+			want:  false,
+		},
+		{
+			name: "StatefulSet UPDATED with env change",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "StatefulSet"},
+						Triggers: []config.Trigger{{EnvChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "StatefulSet", Name: "my-sts", EventType: "UPDATED", EnvChanged: true},
+			want:  true,
+		},
+		{
+			name: "DaemonSet UPDATED with env change",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "DaemonSet"},
+						Triggers: []config.Trigger{{EnvChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "DaemonSet", Name: "my-ds", EventType: "UPDATED", EnvChanged: true},
+			want:  true,
+		},
+		{
+			name: "CronJob UPDATED with env change",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "CronJob"},
+						Triggers: []config.Trigger{{EnvChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "CronJob", Name: "my-cj", EventType: "UPDATED", EnvChanged: true},
+			want:  true,
+		},
+		{
+			name: "both imageChange and envChange triggers - image change detected",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "Deployment"},
+						Triggers: []config.Trigger{{ImageChange: true, EnvChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "Deployment", Name: "my-app", EventType: "UPDATED", ImageChanged: true, EnvChanged: false},
+			want:  true,
+		},
+		{
+			name: "both imageChange and envChange triggers - env change detected",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "Deployment"},
+						Triggers: []config.Trigger{{ImageChange: true, EnvChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "Deployment", Name: "my-app", EventType: "UPDATED", ImageChanged: false, EnvChanged: true},
+			want:  true,
+		},
+		{
+			name: "both imageChange and envChange triggers - both changed",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "Deployment"},
+						Triggers: []config.Trigger{{ImageChange: true, EnvChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "Deployment", Name: "my-app", EventType: "UPDATED", ImageChanged: true, EnvChanged: true},
+			want:  true,
+		},
+		{
+			name: "both imageChange and envChange triggers - neither changed",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "Deployment"},
+						Triggers: []config.Trigger{{ImageChange: true, EnvChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "Deployment", Name: "my-app", EventType: "UPDATED", ImageChanged: false, EnvChanged: false},
+			want:  false,
+		},
+		{
+			name: "envChange only trigger - image change should not trigger",
+			config: &config.Config{
+				Watches: []config.WatchConfig{
+					{
+						Selector: config.WatchSelector{Kind: "Deployment"},
+						Triggers: []config.Trigger{{EnvChange: true}},
+					},
+				},
+			},
+			event: &watcher.Event{Kind: "Deployment", Name: "my-app", EventType: "UPDATED", ImageChanged: true, EnvChanged: false},
+			want:  false,
+		},
 	}
 
 	for _, tt := range tests {

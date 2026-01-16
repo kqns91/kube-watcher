@@ -34,9 +34,11 @@ func (f *Filter) ShouldProcess(event *watcher.Event) bool {
 
 	// Check triggers
 	for _, trigger := range watchConfig.Triggers {
-		if trigger.ImageChange {
-			// For imageChange trigger, check if this is a relevant image change event
-			return f.isImageChangeEvent(event)
+		if trigger.ImageChange && f.isImageChangeEvent(event) {
+			return true
+		}
+		if trigger.EnvChange && f.isEnvChangeEvent(event) {
+			return true
 		}
 	}
 
@@ -57,6 +59,23 @@ func (f *Filter) isImageChangeEvent(event *watcher.Event) bool {
 	case "Deployment", "StatefulSet", "DaemonSet", "CronJob":
 		// For workload resources, only notify on actual image changes
 		return event.EventType == "UPDATED" && event.ImageChanged
+	}
+
+	return false
+}
+
+// isEnvChangeEvent checks if the event represents an environment variable change
+// - For Pod: ADDED event (new Pod with new env started)
+// - For Deployment/StatefulSet/DaemonSet/CronJob: UPDATED with EnvChanged flag
+func (f *Filter) isEnvChangeEvent(event *watcher.Event) bool {
+	switch event.Kind {
+	case "Pod":
+		// For Pod, notify when a new Pod is added
+		return event.EventType == "ADDED"
+
+	case "Deployment", "StatefulSet", "DaemonSet", "CronJob":
+		// For workload resources, only notify on actual env changes
+		return event.EventType == "UPDATED" && event.EnvChanged
 	}
 
 	return false

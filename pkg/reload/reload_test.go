@@ -34,10 +34,6 @@ notifier:
 	}
 	defer watcher.Stop()
 
-	if watcher == nil {
-		t.Fatal("NewConfigWatcher() returned nil")
-	}
-
 	if watcher.configPath != configPath {
 		t.Errorf("Expected configPath %q, got %q", configPath, watcher.configPath)
 	}
