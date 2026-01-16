@@ -3,9 +3,9 @@ entries:
   kube-watcher:
   - apiVersion: v2
     appVersion: 0.7.0
-    created: "2026-01-16T12:20:37.548651978Z"
+    created: "2026-01-16T12:31:38.332008599Z"
     description: Namespace限定権限で動作する軽量なKubernetesリソース監視Bot
-    digest: 7b7d1c5eca8d5db76acee8c81d54e321e35caa39fdf6f3c26896df962ba9b913
+    digest: 67e6d0e0868e4e114702b8794624df98dd203c0f6a566bb1e05dc18c03f88f9b
     home: https://github.com/kqns91/kube-watcher
     icon: https://raw.githubusercontent.com/kqns91/kube-watcher/main/docs/icon.png
     keywords:
@@ -24,4 +24,4 @@ entries:
     urls:
     - https://kqns91.github.io/kube-watcher/kube-watcher-0.7.0.tgz
     version: 0.7.0
-generated: "2026-01-16T12:20:37.547954372Z"
+generated: "2026-01-16T12:31:38.331320247Z"
