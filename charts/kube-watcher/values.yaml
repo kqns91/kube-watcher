@@ -12,7 +12,7 @@ namespace: default
 image:
   repository: ghcr.io/kqns91/kube-watcher
   pullPolicy: IfNotPresent
-  tag: "0.5.0"
+  tag: "0.7.0"
 
 # イメージプルシークレット（プライベートレジストリ使用時）
 imagePullSecrets: []
@@ -66,42 +66,41 @@ slack:
 
 # 監視設定
 config:
-  # 監視するリソースタイプ
-  resources:
-    - kind: Pod
-    - kind: Deployment
-    - kind: Service
+  # watches構文 (v0.6.0以降)
+  # selector: 監視対象の絞り込み (kind必須、name/labelsオプション)
+  # triggers: 通知条件 (imageChange: イメージ変更、envChange: 環境変数変更)
+  watches:
+    - selector:
+        kind: Deployment
+      triggers:
+        - imageChange: true
+          envChange: true
 
-  # フィルター設定
-  filters:
-    - resource: Pod
-      eventTypes:
-        - ADDED
-        - DELETED
-        - UPDATED
-      # ラベルフィルター（オプション）
-      # labels:
-      #   app: web
-      #   environment: production
+    - selector:
+        kind: StatefulSet
+      triggers:
+        - imageChange: true
+          envChange: true
 
-      # CEL式による高度なフィルタリング（v0.5.0以降、オプション）
-      # expressionが設定されている場合、eventTypesとlabelsよりも優先されます
-      # expression: 'event.eventType == "DELETED" && event.labels.app == "web"'
+    - selector:
+        kind: DaemonSet
+      triggers:
+        - imageChange: true
+          envChange: true
 
-    - resource: Deployment
-      eventTypes:
-        - ADDED
-        - DELETED
-        - UPDATED
+    - selector:
+        kind: CronJob
+      triggers:
+        - imageChange: true
+          envChange: true
 
-      # Deploymentの重複通知を除外する例
-      # ReplicaSetUpdated と NewReplicaSetAvailable を除外
-      # expression: 'event.eventType == "UPDATED" && event.reason != "ReplicaSetUpdated" && event.reason != "NewReplicaSetAvailable"'
-
-    - resource: Service
-      eventTypes:
-        - ADDED
-        - DELETED
+    # 特定のラベルを持つPodのみ監視する例
+    # - selector:
+    #     kind: Pod
+    #     labels:
+    #       app: my-app
+    #   triggers:
+    #     - imageChange: true
 
   # 通知メッセージテンプレート
   # Go text/template形式
